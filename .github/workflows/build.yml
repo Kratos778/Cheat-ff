@@ -61,7 +61,6 @@ jobs:
 
           if [ ! -d "app" ] && [ ! -f "gradlew" ]; then
             echo "WARNING: No app/ folder and no gradlew found in repo root."
-            echo "The workflow will try to generate the Gradle wrapper if possible."
           fi
 
           if [ -d "app" ]; then
@@ -85,59 +84,53 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-}"
-          echo "ANDROID_HOME=${ANDROID_HOME:-}"
+          export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/android-sdk}}"
+          export ANDROID_HOME="${ANDROID_SDK_ROOT}"
+          export PATH="${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin:${ANDROID_SDK_ROOT}/platform-tools:${PATH}"
 
-          if [ -z "${ANDROID_SDK_ROOT:-}" ] && [ -n "${ANDROID_HOME:-}" ]; then
-            export ANDROID_SDK_ROOT="${ANDROID_HOME}"
+          mkdir -p "${ANDROID_SDK_ROOT}"
+
+          if [ ! -x "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" ]; then
+            echo "cmdline-tools/latest not found. Installing it manually..."
+            mkdir -p "${ANDROID_SDK_ROOT}/cmdline-tools"
+
+            curl -fsSL "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip" -o /tmp/cmdline-tools.zip
+            unzip -q /tmp/cmdline-tools.zip -d "${ANDROID_SDK_ROOT}/cmdline-tools"
+
+            rm -rf "${ANDROID_SDK_ROOT}/cmdline-tools/latest"
+
+            if [ -d "${ANDROID_SDK_ROOT}/cmdline-tools/cmdline-tools" ]; then
+              mv "${ANDROID_SDK_ROOT}/cmdline-tools/cmdline-tools" "${ANDROID_SDK_ROOT}/cmdline-tools/latest"
+            fi
           fi
 
-          if [ -z "${ANDROID_SDK_ROOT:-}" ]; then
-            echo "ERROR: Android SDK root is not defined."
+          if [ ! -x "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" ]; then
+            echo "ERROR: sdkmanager not available at ${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager"
             exit 1
           fi
 
-          CMDLINE_BIN="${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager"
-          if [ ! -x "${CMDLINE_BIN}" ]; then
-            echo "cmdline-tools/latest not found. Installing it first..."
-            yes | sdkmanager --install "cmdline-tools;latest"
-          fi
+          echo "sdk.dir=${ANDROID_SDK_ROOT}" > local.properties
 
-          if [ ! -x "${CMDLINE_BIN}" ]; then
-            echo "ERROR: SDK manager still not available at ${CMDLINE_BIN}"
-            exit 1
-          fi
+          yes | "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null
 
-          yes | "${CMDLINE_BIN}" --licenses >/dev/null
-          "${CMDLINE_BIN}" --install \
+          "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" --install \
             "platform-tools" \
             "platforms;android-${ANDROID_SDK_VERSION}" \
-            "build-tools;${ANDROID_BUILD_TOOLS}" \
-            "platforms;android-34" \
-            "extras;android;m2repository" \
-            "extras;google;m2repository"
+            "build-tools;${ANDROID_BUILD_TOOLS}"
 
       - name: Ensure Gradle wrapper exists
         shell: bash
         run: |
           set -euo pipefail
 
-          if [ -f "gradlew" ]; then
-            echo "Gradle wrapper already exists."
-          else
+          if [ ! -f "gradlew" ]; then
             echo "Gradle wrapper not found. Generating one..."
-
-            if ! command -v gradle >/dev/null 2>&1; then
-              echo "ERROR: gradle command not found. Cannot generate wrapper."
-              exit 1
-            fi
-
             gradle wrapper --gradle-version "${GRADLE_VERSION}" --distribution-type bin
+          fi
 
-            if [ ! -f "gradlew" ]; then
-              echo "ERROR: gradlew was not generated successfully."
-              exit 1
-            fi
+          if [ ! -f "gradlew" ]; then
+            echo "ERROR: gradlew was not generated successfully."
+            exit 1
           fi
 
           chmod +x ./gradlew
