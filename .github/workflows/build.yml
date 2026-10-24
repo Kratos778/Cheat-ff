@@ -27,24 +27,24 @@ jobs:
           if [ -f "FFLauncher-source.zip" ]; then
             mkdir -p extracted
             unzip -q FFLauncher-source.zip -d extracted || {
-              echo "Failed to unzip FFLauncher-source.zip"
+              echo "Falha ao extrair FFLauncher-source.zip"
               exit 1
             }
 
-            # tenta encontrar o projeto Android dentro do zip
-            CANDIDATE=$(find extracted -name gradlew -type f 2>/dev/null | head -n 1 | xargs dirname || true)
+            # tenta localizar o projeto Android dentro do zip
+            CANDIDATE=$(find extracted -type f \( -name gradlew -o -name settings.gradle -o -name build.gradle \) 2>/dev/null | head -n 1 || true)
             if [ -n "$CANDIDATE" ]; then
-              PROJECT_ROOT="$CANDIDATE"
+              PROJECT_ROOT=$(dirname "$CANDIDATE")
             fi
           fi
 
-          # se o projeto não estiver no zip, tenta localizar na raiz do checkout
           if [ ! -f "$PROJECT_ROOT/gradlew" ]; then
-            FOUND=$(find . -name gradlew -type f 2>/dev/null | head -n 1 || true)
+            FOUND=$(find . extracted -type f -name gradlew 2>/dev/null | head -n 1 || true)
             if [ -n "$FOUND" ]; then
               PROJECT_ROOT=$(dirname "$FOUND")
             else
-              echo "No Android project found. Expected gradlew in repo root or extracted zip."
+              echo "Nenhum projeto Android encontrado."
+              echo "Estruturas esperadas: gradlew, settings.gradle ou build.gradle"
               exit 1
             fi
           fi
