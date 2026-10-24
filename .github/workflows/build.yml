@@ -22,10 +22,20 @@ jobs:
           rm -rf FFLauncher
           unzip -oq FFLauncher-project.zip -d .
 
-          test -f FFLauncher/settings.gradle.kts
-          test -f FFLauncher/build.gradle.kts
-          test -f FFLauncher/app/build.gradle.kts
+          if [ ! -d FFLauncher ]; then
+            echo "Erro: a pasta FFLauncher não foi criada após extrair o ZIP."
+            find . -maxdepth 3 -type f | sed 's#^./##' | head -200
+            exit 1
+          fi
 
-          chmod +x FFLauncher/gradlew
-          cd FFLauncher
+          GRADLEW="$(find FFLauncher -path '*/gradlew' -type f | head -n 1 || true)"
+
+          if [ -z "${GRADLEW}" ]; then
+            echo "Erro: gradlew não foi encontrado dentro do ZIP extraído."
+            find FFLauncher -maxdepth 5 -type f | sed 's#^./##' | head -200
+            exit 1
+          fi
+
+          chmod +x "${GRADLEW}"
+          cd "$(dirname "${GRADLEW}")"
           ./gradlew assembleDebug --no-daemon --stacktrace
