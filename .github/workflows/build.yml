@@ -84,14 +84,38 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          yes | sdkmanager --licenses
-          sdkmanager "platform-tools" \
-                     "platforms;android-${ANDROID_SDK_VERSION}" \
-                     "build-tools;${ANDROID_BUILD_TOOLS}" \
-                     "platforms;android-34" \
-                     "extra-android-m2repository" \
-                     "extra-google-m2repository" \
-                     "cmdline-tools;latest"
+
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-}"
+          echo "ANDROID_HOME=${ANDROID_HOME:-}"
+
+          if [ -z "${ANDROID_SDK_ROOT:-}" ] && [ -n "${ANDROID_HOME:-}" ]; then
+            export ANDROID_SDK_ROOT="${ANDROID_HOME}"
+          fi
+
+          if [ -z "${ANDROID_SDK_ROOT:-}" ]; then
+            echo "ERROR: Android SDK root is not defined."
+            exit 1
+          fi
+
+          CMDLINE_BIN="${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "${CMDLINE_BIN}" ]; then
+            echo "cmdline-tools/latest not found. Installing it first..."
+            yes | sdkmanager --install "cmdline-tools;latest"
+          fi
+
+          if [ ! -x "${CMDLINE_BIN}" ]; then
+            echo "ERROR: SDK manager still not available at ${CMDLINE_BIN}"
+            exit 1
+          fi
+
+          yes | "${CMDLINE_BIN}" --licenses >/dev/null
+          "${CMDLINE_BIN}" --install \
+            "platform-tools" \
+            "platforms;android-${ANDROID_SDK_VERSION}" \
+            "build-tools;${ANDROID_BUILD_TOOLS}" \
+            "platforms;android-34" \
+            "extras;android;m2repository" \
+            "extras;google;m2repository"
 
       - name: Ensure Gradle wrapper exists
         shell: bash
