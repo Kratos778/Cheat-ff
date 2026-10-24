@@ -1,124 +1,187 @@
-name: Android Build
+name: Android CI/CD
 
 on:
   push:
     branches:
       - main
+      - master
   pull_request:
     branches:
       - main
+      - master
   workflow_dispatch:
+    inputs:
+      build_type:
+        description: "Tipo de build"
+        required: true
+        default: "debug"
+        type: choice
+        options:
+          - debug
+          - release
+
+permissions:
+  contents: read
+
+env:
+  JAVA_VERSION: "17"
+  ANDROID_SDK_VERSION: "35"
+  ANDROID_BUILD_TOOLS: "35.0.0"
+  GRADLE_VERSION: "8.7"
 
 jobs:
-  build:
-    name: Build APK
+  validate-and-build:
+    name: Validate Android project and build APK
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-
-    env:
-      JAVA_VERSION: "17"
-      ZIP_NAME: "FFLauncher-project.zip"
+    timeout-minutes: 45
 
     steps:
-      - name: Checkout do repositório
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Configurar Java
+      - name: Validate project structure
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "== Root contents =="
+          ls -la
+
+          if [ ! -f "build.gradle.kts" ] && [ ! -f "build.gradle" ]; then
+            echo "ERROR: build.gradle.kts or build.gradle not found."
+            exit 1
+          fi
+
+          if [ ! -f "settings.gradle.kts" ] && [ ! -f "settings.gradle" ]; then
+            echo "ERROR: settings.gradle.kts or settings.gradle not found."
+            exit 1
+          fi
+
+          if [ ! -d "app" ] && [ ! -f "gradlew" ]; then
+            echo "WARNING: No app/ folder and no gradlew found in repo root."
+            echo "The workflow will try to generate the Gradle wrapper if possible."
+          fi
+
+          if [ -d "app" ]; then
+            echo "Project structure looks valid: app/ exists."
+          else
+            echo "No app/ folder detected yet. Build may still work if the project is a single-module Gradle app."
+          fi
+
+      - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
           cache: gradle
 
-      - name: Verificar se o ZIP existe
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK components
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses
+          sdkmanager "platform-tools" \
+                     "platforms;android-${ANDROID_SDK_VERSION}" \
+                     "build-tools;${ANDROID_BUILD_TOOLS}" \
+                     "platforms;android-34" \
+                     "extra-android-m2repository" \
+                     "extra-google-m2repository" \
+                     "cmdline-tools;latest"
+
+      - name: Ensure Gradle wrapper exists
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Conteúdo da raiz do repo:"
-          ls -la
+          if [ -f "gradlew" ]; then
+            echo "Gradle wrapper already exists."
+          else
+            echo "Gradle wrapper not found. Generating one..."
 
-          if [ ! -f "${ZIP_NAME}" ]; then
-            echo "Erro: ${ZIP_NAME} não foi encontrado no repositório."
-            find . -maxdepth 4 -type f | sed 's#^./##' | head -200
-            exit 1
+            if ! command -v gradle >/dev/null 2>&1; then
+              echo "ERROR: gradle command not found. Cannot generate wrapper."
+              exit 1
+            fi
+
+            gradle wrapper --gradle-version "${GRADLE_VERSION}" --distribution-type bin
+
+            if [ ! -f "gradlew" ]; then
+              echo "ERROR: gradlew was not generated successfully."
+              exit 1
+            fi
           fi
 
-      - name: Extrair o projeto do ZIP
+          chmod +x ./gradlew
+          ./gradlew -v
+
+      - name: Run unit tests and lint
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./gradlew clean testDebugUnitTest lintDebug --stacktrace
+        continue-on-error: false
+
+      - name: Build debug APK
+        if: ${{ github.event.inputs.build_type == 'debug' || github.event.inputs.build_type == '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./gradlew assembleDebug --stacktrace --no-daemon
+        continue-on-error: false
+
+      - name: Build release APK
+        if: ${{ github.event.inputs.build_type == 'release' }}
         shell: bash
         run: |
           set -euo pipefail
 
-          EXTRACT_DIR="/tmp/fflauncher_extract"
-          rm -rf "${EXTRACT_DIR}"
-          mkdir -p "${EXTRACT_DIR}"
+          if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ] && [ -n "${{ secrets.KEYSTORE_PASSWORD }}" ] && [ -n "${{ secrets.KEY_ALIAS }}" ] && [ -n "${{ secrets.KEY_PASSWORD }}" ]; then
+            echo "Release signing secrets detected. Preparing signing config..."
 
-          unzip -oq "${ZIP_NAME}" -d "${EXTRACT_DIR}"
+            echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > app/release-keystore.jks
 
-          echo "Estrutura extraída:"
-          find "${EXTRACT_DIR}" -maxdepth 5 -print | head -200
+            cat > keystore.properties <<EOF
+            storeFile=app/release-keystore.jks
+            storePassword=${{ secrets.KEYSTORE_PASSWORD }}
+            keyAlias=${{ secrets.KEY_ALIAS }}
+            keyPassword=${{ secrets.KEY_PASSWORD }}
+            EOF
 
-          PROJECT_DIR="$(find "${EXTRACT_DIR}" -maxdepth 6 -type d -name FFLauncher | head -n 1 || true)"
-          if [ -z "${PROJECT_DIR}" ]; then
-            PROJECT_DIR="$(find "${EXTRACT_DIR}" -maxdepth 6 -type d | head -n 1 || true)"
+            ./gradlew assembleRelease --stacktrace --no-daemon
+          else
+            echo "No release signing secrets found. Building unsigned release APK instead."
+            ./gradlew assembleRelease --stacktrace --no-daemon
           fi
 
-          if [ -z "${PROJECT_DIR}" ]; then
-            echo "Erro: pasta do projeto não foi encontrada dentro do ZIP."
-            find "${EXTRACT_DIR}" -maxdepth 6 | head -200
-            exit 1
-          fi
-
-          echo "PROJECT_DIR=${PROJECT_DIR}" >> "${GITHUB_ENV}"
-
-      - name: Localizar gradlew e preparar build
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          PROJECT_DIR="${PROJECT_DIR:-}"
-          if [ -z "${PROJECT_DIR}" ]; then
-            echo "Erro: variável PROJECT_DIR não foi definida."
-            exit 1
-          fi
-
-          GRADLEW="$(find "${PROJECT_DIR}" -path '*/gradlew' -type f | head -n 1 || true)"
-
-          if [ -z "${GRADLEW}" ]; then
-            echo "Erro: gradlew não foi encontrado dentro do projeto extraído."
-            find "${PROJECT_DIR}" -maxdepth 8 -type f | sed 's#^./##' | head -200
-            exit 1
-          fi
-
-          chmod +x "${GRADLEW}"
-          PROJECT_ROOT="$(dirname "${GRADLEW}")"
-
-          echo "GRADLEW=${GRADLEW}"
-          echo "PROJECT_ROOT=${PROJECT_ROOT}"
-          echo "PROJECT_ROOT=${PROJECT_ROOT}" >> "${GITHUB_ENV}"
-
-      - name: Compilar APK
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          PROJECT_ROOT="${PROJECT_ROOT:-}"
-          if [ -z "${PROJECT_ROOT}" ]; then
-            echo "Erro: PROJECT_ROOT vazio."
-            exit 1
-          fi
-
-          cd "${PROJECT_ROOT}"
-          ./gradlew assembleDebug --no-daemon --stacktrace
-
-      - name: Upload do APK gerado
+      - name: Upload debug APK artifact
+        if: ${{ always() && hashFiles('**/build/outputs/apk/debug/*.apk') != '' }}
         uses: actions/upload-artifact@v4
-        if: success()
         with:
           name: FFLauncher-debug-apk
           path: |
-            **/build/outputs/**/*.apk
-            **/*.apk
+            **/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+
+      - name: Upload release APK artifact
+        if: ${{ always() && hashFiles('**/build/outputs/apk/release/*.apk') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: FFLauncher-release-apk
+          path: |
+            **/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+
+      - name: Upload build reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: FFLauncher-build-reports
+          path: |
+            **/build/reports/**
+            **/build/test-results/**
+          if-no-files-found: ignore
