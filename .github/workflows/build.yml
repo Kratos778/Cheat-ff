@@ -9,20 +9,23 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Extrair projeto Android
+      - name: Checkout do repositório
+        uses: actions/checkout@v4
+
+      - name: Extrair projeto e compilar
         shell: bash
         run: |
           set -euo pipefail
+
           rm -rf FFLauncher
           unzip -oq FFLauncher-project.zip -d .
+
           test -f FFLauncher/settings.gradle.kts
           test -f FFLauncher/build.gradle.kts
           test -f FFLauncher/app/build.gradle.kts
 
-      - name: Tornar gradlew executável
-        run: chmod +x FFLauncher/gradlew
-
-      - name: Compilar APK em modo debug
-        working-directory: FFLauncher
-        run: ./gradlew assembleDebug --no-daemon --stacktrace
+          chmod +x FFLauncher/gradlew
+          cd FFLauncher
+          ./gradlew assembleDebug --no-daemon --stacktrace
