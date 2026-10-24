@@ -1,16 +1,28 @@
-- name: Extrair projeto Android
-  shell: bash
-  run: |
-    set -euo pipefail
-    rm -rf FFLauncher
-    unzip -oq FFLauncher-project.zip -d .
-    test -f FFLauncher/settings.gradle.kts
-    test -f FFLauncher/build.gradle.kts
-    test -f FFLauncher/app/build.gradle.kts
+name: Android Build
 
-- name: Tornar gradlew executável
-  run: chmod +x FFLauncher/gradlew
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
 
-- name: Compilar APK em modo debug
-  working-directory: FFLauncher
-  run: ./gradlew assembleDebug --no-daemon --stacktrace
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Extrair projeto Android
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf FFLauncher
+          unzip -oq FFLauncher-project.zip -d .
+          test -f FFLauncher/settings.gradle.kts
+          test -f FFLauncher/build.gradle.kts
+          test -f FFLauncher/app/build.gradle.kts
+
+      - name: Tornar gradlew executável
+        run: chmod +x FFLauncher/gradlew
+
+      - name: Compilar APK em modo debug
+        working-directory: FFLauncher
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
