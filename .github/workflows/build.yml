@@ -4,38 +4,121 @@ on:
   push:
     branches:
       - main
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
   build:
+    name: Build APK
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      JAVA_VERSION: "17"
+      ZIP_NAME: "FFLauncher-project.zip"
 
     steps:
       - name: Checkout do repositório
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Extrair projeto e compilar
+      - name: Configurar Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: gradle
+
+      - name: Verificar se o ZIP existe
         shell: bash
         run: |
           set -euo pipefail
 
-          rm -rf FFLauncher
-          unzip -oq FFLauncher-project.zip -d .
+          echo "Conteúdo da raiz do repo:"
+          ls -la
 
-          if [ ! -d FFLauncher ]; then
-            echo "Erro: a pasta FFLauncher não foi criada após extrair o ZIP."
-            find . -maxdepth 3 -type f | sed 's#^./##' | head -200
+          if [ ! -f "${ZIP_NAME}" ]; then
+            echo "Erro: ${ZIP_NAME} não foi encontrado no repositório."
+            find . -maxdepth 4 -type f | sed 's#^./##' | head -200
             exit 1
           fi
 
-          GRADLEW="$(find FFLauncher -path '*/gradlew' -type f | head -n 1 || true)"
+      - name: Extrair o projeto do ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          EXTRACT_DIR="/tmp/fflauncher_extract"
+          rm -rf "${EXTRACT_DIR}"
+          mkdir -p "${EXTRACT_DIR}"
+
+          unzip -oq "${ZIP_NAME}" -d "${EXTRACT_DIR}"
+
+          echo "Estrutura extraída:"
+          find "${EXTRACT_DIR}" -maxdepth 5 -print | head -200
+
+          PROJECT_DIR="$(find "${EXTRACT_DIR}" -maxdepth 6 -type d -name FFLauncher | head -n 1 || true)"
+          if [ -z "${PROJECT_DIR}" ]; then
+            PROJECT_DIR="$(find "${EXTRACT_DIR}" -maxdepth 6 -type d | head -n 1 || true)"
+          fi
+
+          if [ -z "${PROJECT_DIR}" ]; then
+            echo "Erro: pasta do projeto não foi encontrada dentro do ZIP."
+            find "${EXTRACT_DIR}" -maxdepth 6 | head -200
+            exit 1
+          fi
+
+          echo "PROJECT_DIR=${PROJECT_DIR}" >> "${GITHUB_ENV}"
+
+      - name: Localizar gradlew e preparar build
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PROJECT_DIR="${PROJECT_DIR:-}"
+          if [ -z "${PROJECT_DIR}" ]; then
+            echo "Erro: variável PROJECT_DIR não foi definida."
+            exit 1
+          fi
+
+          GRADLEW="$(find "${PROJECT_DIR}" -path '*/gradlew' -type f | head -n 1 || true)"
 
           if [ -z "${GRADLEW}" ]; then
-            echo "Erro: gradlew não foi encontrado dentro do ZIP extraído."
-            find FFLauncher -maxdepth 5 -type f | sed 's#^./##' | head -200
+            echo "Erro: gradlew não foi encontrado dentro do projeto extraído."
+            find "${PROJECT_DIR}" -maxdepth 8 -type f | sed 's#^./##' | head -200
             exit 1
           fi
 
           chmod +x "${GRADLEW}"
-          cd "$(dirname "${GRADLEW}")"
+          PROJECT_ROOT="$(dirname "${GRADLEW}")"
+
+          echo "GRADLEW=${GRADLEW}"
+          echo "PROJECT_ROOT=${PROJECT_ROOT}"
+          echo "PROJECT_ROOT=${PROJECT_ROOT}" >> "${GITHUB_ENV}"
+
+      - name: Compilar APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PROJECT_ROOT="${PROJECT_ROOT:-}"
+          if [ -z "${PROJECT_ROOT}" ]; then
+            echo "Erro: PROJECT_ROOT vazio."
+            exit 1
+          fi
+
+          cd "${PROJECT_ROOT}"
           ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Upload do APK gerado
+        uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: FFLauncher-debug-apk
+          path: |
+            **/build/outputs/**/*.apk
+            **/*.apk
+          if-no-files-found: error
